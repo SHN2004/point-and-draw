@@ -7,7 +7,7 @@
     <!-- Import Socket.IO Client -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
-        body { margin: 0; background-color: #111; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; overflow: hidden; }
+        body { margin: 0; background-color: #111; display: flex; flex-direction: column; min-height: 100vh; font-family: sans-serif; }
 
         /* This container will center the video feed and act as a reference for the canvas */
         #screen-container {
@@ -28,8 +28,8 @@
         /* The canvas will be positioned exactly over the video feed by JavaScript */
         #draw-canvas {
             position: absolute;
-            touch-action: none; /* Prevents scrolling while drawing */
-            border: 1px solid #00f; /* Blue border for debugging, can be removed later */
+            /* touch-action: none; <-- REMOVE THIS LINE */
+            border: 1px solid #00f; /* Keep for debugging, remove later */
         }
 
         #controls {
