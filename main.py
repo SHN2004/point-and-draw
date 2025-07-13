@@ -4,11 +4,82 @@ import io
 import mss
 from PIL import Image
 import threading
+import random
+import itertools
+import os
 from flask import Flask, render_template, Response
 from flask_socketio import SocketIO, emit
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtCore import Qt, QPoint, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QPainter, QColor, QPen
+
+# Optional color support for Windows
+try:
+    from colorama import init, Fore, Style
+    init()
+except ImportError:
+    class Fore:
+        GREEN = ''
+        CYAN = ''
+        MAGENTA = ''
+        RED = ''
+        YELLOW = ''
+    class Style:
+        RESET_ALL = ''
+
+# --- Startup Animation Code ---
+
+ASCII_BANNER = r"""
+ ________               ___  ___              ________      
+|\   ____\             |\  |\  \            |\   ___  \    
+\ \  \___|_            \ \  \\\  \           \ \  \\ \  \   
+ \ \_____  \            \ \   __  \           \ \  \\ \  \  
+  \|____|\  \            \ \  \ \  \           \ \  \\ \  \ 
+    ____\_\  \            \ \__\ \__\           \ \__\\ \__\
+   |\_________\            \|__|\|__|            \|__| \|__|
+   \|_________|                                              
+"""
+
+def type_out(text, delay=0.02):
+    """Typing effect"""
+    for char in text:
+        print(char, end='', flush=True)
+        time.sleep(delay)
+    print()
+
+def flicker_line(text, times=10):
+    """Simulate flickering daemon line"""
+    for _ in range(times):
+        flicker = random.choice(['', ' ', text[:len(text)//2], '█'*len(text)])
+        sys.stdout.write('\r' + flicker.ljust(len(text)))
+        sys.stdout.flush()
+        time.sleep(random.uniform(0.05, 0.15))
+    sys.stdout.write('\r' + text + '\n')
+
+def loading_bar(duration=2):
+    """Loading bar that actually fills"""
+    bar_length = 30
+    steps = int(duration / 0.05)
+    for i in range(steps + 1):
+        progress = i / steps
+        filled = int(bar_length * progress)
+        bar = Fore.CYAN + '█' * filled + Fore.CYAN + '-' * (bar_length - filled)
+        sys.stdout.write(f'\r{Fore.CYAN}DEAMON LOADING [{bar}{Fore.CYAN}] {int(progress * 100)}%')
+        sys.stdout.flush()
+        time.sleep(0.05)
+    print(Style.RESET_ALL)
+
+def run_startup_animation():
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print(Fore.CYAN + ASCII_BANNER + Style.RESET_ALL)
+    time.sleep(0.3)
+    print(Fore.CYAN, end='')
+    flicker_line("[Initializing Daemon :: ████████████:: Active]")
+    loading_bar(1.3)
+    type_out(Fore.GREEN + "\n> SYSTEM ONLINE", 0.03)
+    time.sleep(0.5)
+    print(Style.RESET_ALL)
+
 
 # --- Part 1: Thread-Safe Communication ---
 # A helper object that will emit signals from the web thread to the GUI thread
@@ -17,6 +88,7 @@ class SignalBridge(QObject):
     point_added = pyqtSignal(dict)
     drawing_cleared = pyqtSignal()
     settings_changed = pyqtSignal(dict)
+    stroke_finished = pyqtSignal()
 
 # --- Part 2: Flask and SocketIO Setup ---
 app = Flask(__name__) # Flask will now find templates/ and static/ automatically
@@ -57,6 +129,7 @@ class DrawingWindow(QMainWindow):
         signals.point_added.connect(self._handle_point_added)
         signals.drawing_cleared.connect(self.clear_drawing)
         signals.settings_changed.connect(self._handle_settings_changed)
+        signals.stroke_finished.connect(self.finish_stroke)
 
     # --- SLOTS (Thread-Safe Handlers) ---
     def _handle_point_added(self, data):
@@ -73,7 +146,8 @@ class DrawingWindow(QMainWindow):
             
             new_stroke = {
                 'points': [point], 'color': color, 'width': width, 'opacity': 1.0,
-                'fade': self.persistence == 'fade' or self.draw_tool == 'pointer'
+                'fade': self.persistence == 'fade' or self.draw_tool == 'pointer',
+                'active': True  # Mark the new stroke as active
             }
             self.points.append(new_stroke)
         elif self.points:
@@ -84,6 +158,11 @@ class DrawingWindow(QMainWindow):
     def clear_drawing(self):
         self.points = []
         self.update() # Safely called in the GUI thread
+
+    def finish_stroke():
+        """Deactivates the last drawn stroke, making it eligible for fading."""
+        if self.points:
+            self.points[-1]['active'] = False
 
     def _handle_settings_changed(self, data):
         self.draw_tool = data.get('tool', self.draw_tool)
@@ -104,11 +183,33 @@ class DrawingWindow(QMainWindow):
                         painter.drawLine(stroke['points'][i], stroke['points'][i+1])
 
     def update_fades(self):
-        if any(s['fade'] for s in self.points):
-            self.points = [s for s in self.points if not s['fade'] or s['opacity'] > 0]
-            for stroke in self.points:
-                if stroke['fade']:
-                    stroke['opacity'] -= 0.015
+        """
+        Handles the gradual fading of strokes. This is called by a QTimer.
+        """
+        fading_occurred = False
+        strokes_to_keep = []
+
+        for stroke in self.points:
+            # A stroke should fade if it's marked to fade AND it's not currently being drawn.
+            is_eligible_for_fading = stroke['fade'] and not stroke.get('active', False)
+
+            if is_eligible_for_fading:
+                fading_occurred = True
+                # Reduce the opacity for this frame.
+                stroke['opacity'] -= 0.015 # Controls the speed of the fade
+                
+                # Only keep the stroke if it's still visible.
+                if stroke['opacity'] > 0:
+                    strokes_to_keep.append(stroke)
+            else:
+                # Keep all other strokes (permanent ones, or active ones).
+                strokes_to_keep.append(stroke)
+        
+        # Replace the old list with the new one that has updated opacities.
+        self.points = strokes_to_keep
+
+        # Trigger a repaint only if something actually changed.
+        if fading_occurred:
             self.update()
 
 # --- Part 4: Screen Streaming and SocketIO Events ---
@@ -149,8 +250,14 @@ def handle_clear_event():
 def handle_settings_event(data):
     signals.settings_changed.emit(data) # Emit the signal
 
+@socketio.on('stroke_finished_event')
+def handle_stroke_finished():
+    signals.stroke_finished.emit()
+
 # --- Part 5: Main Application Execution ---
 if __name__ == '__main__':
+    run_startup_animation()
+    
     # Start the Flask-SocketIO server in a background thread
     server_thread = threading.Thread(target=lambda: socketio.run(app, host='0.0.0.0', port=5000))
     server_thread.daemon = True

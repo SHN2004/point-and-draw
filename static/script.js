@@ -56,7 +56,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     function stopDraw(e) {
         // Reset the drawing state when the last finger is lifted.
-        isDrawing = false;
+        if (isDrawing) {
+            isDrawing = false;
+            // Tell the server the stroke is complete so it can start fading if needed
+            socket.emit('stroke_finished_event');
+        }
     }
     // --- Event Listeners (no changes here) ---
     socket.on('connect', () => {
@@ -67,6 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
     screenFeed.addEventListener('load', syncCanvasToVideo);
     canvas.addEventListener('touchstart', startDraw);
     canvas.addEventListener('touchend', stopDraw);
+    canvas.addEventListener('touchcancel', stopDraw); // Also handle interruptions
     canvas.addEventListener('touchmove', handleDraw);
     toolButtons.forEach(button => {
         button.addEventListener('click', () => {
